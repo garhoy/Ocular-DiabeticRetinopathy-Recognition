@@ -1,6 +1,9 @@
 import pandas as pd
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
-
+from tensorflow.keras.applications import VGG16
+from tensorflow.keras import layers, models
+import tqdm 
+import time 
 ############################################ READING AND CLEANING DATAFRAME ################################################
 
 def Reading_csv():
@@ -44,6 +47,36 @@ def preprocces_images(df_filtering):
 
     return train_generator
 
+def build_model(): 
+    base_model = VGG16(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+
+    for layer in base_model.layers:
+        layer.trainable = False
+
+    x = base_model.output
+    x = layers.GlobalAveragePooling2D()(x)
+    x = layers.Dense(1024, activation='relu')(x)
+    predictions = layers.Dense(1, activation='sigmoid')(x)
+
+    model = models.Model(inputs=base_model.input, outputs=predictions)
+
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+    return model
+
+
+
+def train_model(model, train_generator, epochs, steps_per_epoch):
+    for epoch in tqdm(range(epochs), desc="Training Progress"):
+        model.fit(train_generator, steps_per_epoch=steps_per_epoch)
+
 if __name__ == "__main__":
     df_filtering = Reading_csv()
-    preprocces_images(df_filtering)
+    train_generator = preprocces_images(df_filtering)
+    model = build_model()
+
+    start_time = time.time()
+    train_model(model, train_generator, 10, 100)
+    end_time = time.time()
+
+    print(f"Total training time: {end_time - start_time} seconds")
