@@ -1,6 +1,7 @@
+print(__doc__)
 import pandas as pd
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from tensorflow.keras.applications import VGG16, ResNet50, InceptionV3, DenseNet121, EfficientNetB7
+from tensorflow.keras.applications import ResNet152, InceptionV3, DenseNet121, EfficientNetB7
 from tensorflow.keras import layers, models
 from tqdm import tqdm
 import time
@@ -8,9 +9,18 @@ import os
 import matplotlib.pyplot as plt
 from tensorflow.keras.optimizers import Adam
 
+import itertools
+import numpy as np
+np.set_printoptions(threshold=np.inf)
+np.set_printoptions(linewidth=np.nan)
+
+from sklearn import svm, datasets
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix
+
 ############################################ READING AND CLEANING DATAFRAME #############################################
 def Reading_csv():
-    df = pd.read_csv("full_df.csv")
+    df = pd.read_csv("/content/drive/MyDrive/TFG/full_df.csv")
 
     df_filtering = df[df['labels'].isin(["['N']", "['D']"])].copy()
     df_filtering.loc[:, 'labels'] = df_filtering['labels'].replace({"['N']": '0', "['D']": '1'}).astype(str)
@@ -26,29 +36,43 @@ def Reading_csv():
 def preprocces_images(df_filtering):
     global target_size
     datagen = ImageDataGenerator(
-        rescale=1./255,  
-        rotation_range=20,  
-        width_shift_range=0.2, 
-        height_shift_range=0.2,  
-        shear_range=0.2,  
-        zoom_range=0.2, 
-        horizontal_flip=True, 
-        fill_mode='nearest' 
+        rescale=1./255,
+        rotation_range=20,
+        width_shift_range=0.2,
+        height_shift_range=0.2,
+        shear_range=0.2,
+        zoom_range=0.2,
+        horizontal_flip=True,
+        fill_mode='nearest',
+        validation_split=0.2 
     )
 
-    df_filtering['filename'] = '/home/ander/Desktop/Cuarto/TFG/Train/' + df_filtering['filename']
+    df_filtering['filename'] = '/content/drive/MyDrive/TFG/TrainDosClases/' + df_filtering['filename']
     print(df_filtering)
+
     train_generator = datagen.flow_from_dataframe(
         dataframe=df_filtering,
-        directory='.',  
-        x_col='filename',  
-        y_col='labels',  
-        target_size=target_size,  
+        directory='.',
+        x_col='filename',
+        y_col='labels',
+        target_size=target_size,
         batch_size=32,
-        class_mode='binary' 
+        class_mode='binary',
+        subset='training' 
     )
 
-    return train_generator
+    validation_generator = datagen.flow_from_dataframe(
+        dataframe=df_filtering,
+        directory='.',
+        x_col='filename',
+        y_col='labels',
+        target_size=target_size,
+        batch_size=32,
+        class_mode='binary',
+        subset='validation'  
+    )
+
+    return train_generator, validation_generator
 
 def add_new_images_to_df(df, start_number, num_new_images, label):
     new_entries = []
@@ -67,19 +91,20 @@ def add_new_images_to_df(df, start_number, num_new_images, label):
     new_df = pd.DataFrame(new_entries)
     return pd.concat([df, new_df], ignore_index=True)
 
-def build_model(fine_tune_layers = 0): 
+def build_model(fine_tune_layers = 0):
     global input_shape
-    model_name = "Resnet"
+    model_name = "DenseNet"
 
     if   model_name == "Resnet":
-        base_model = ResNet50(weights='imagenet', include_top=False, input_shape=input_shape)
+        base_model = ResNet152(weights='imagenet', include_top=False, input_shape=input_shape)
     elif model_name == "Inception":
         base_model = InceptionV3(weights='imagenet', include_top=False, input_shape=input_shape)
     elif model_name == "DenseNet":
         base_model = DenseNet121(weights='imagenet', include_top=False, input_shape=input_shape)
     elif model_name == "EfficientNet":
         base_model = EfficientNetB7(weights='imagenet', include_top=False, input_shape=input_shape)
-    
+    #  elif
+      #model = InceptionResNetV2(weights='imagenet', include_top=True)
     for layer in base_model.layers:
         layer.trainable = False
 
@@ -102,9 +127,14 @@ def build_model(fine_tune_layers = 0):
 
 
 
-def train_model(model, train_generator, epochs, steps_per_epoch):
-    for epoch in tqdm(range(epochs), desc="Training Progress"):
-        history = model.fit(train_generator, steps_per_epoch=steps_per_epoch)
+def train_model(model, train_generator, epochs, steps_per_epoch, validation_data, validation_steps):
+    history = model.fit(
+        train_generator,
+        steps_per_epoch=steps_per_epoch,
+        epochs=epochs,
+        validation_data=validation_data,
+        validation_steps=validation_steps
+    )
     return history
 
 def plot_training_history(history):
@@ -126,24 +156,56 @@ def plot_training_history(history):
     plt.ylabel('Loss')
     plt.xlabel('Epoch')
     plt.legend()
-    plt.savefig("Training_history.png")
     plt.show()
+
+def get_predictions_and_labels(model, generator):
+    predictions = model.predict(generator, steps=np.ceil(generator.samples/generator.batch_size))
+    y_score = (predictions > 0.5).astype('int').flatten()
+    y_test = generator.classes
+    return y_score, y_test
+
+def plot_confusion_matrix(cm, classes, normalize=False, title='Confusion matrix', cmap=plt.cm.Blues):
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        print("Normalized confusion matrix")
+    else:
+        print('Confusion matrix, without normalization')
+
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45)
+    plt.yticks(tick_marks, classes)
+
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, cm[i, j], horizontalalignment="center", color="white" if cm[i, j] > thresh else "black")
+
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
 
 
 if __name__ == "__main__":
     df_filtering = Reading_csv()
-    start_number = 4785 
+    start_number = 4785
     num_new_images = 1265
     target_size = (512,512)
     input_shape = (512,512,3)
     df_filtering = add_new_images_to_df(df_filtering, start_number, num_new_images, '1')
     print("Labels value count :")
     print(df_filtering['labels'].value_counts())
-    train_generator = preprocces_images(df_filtering)
-    model = build_model(5)
+    train_generator,validation_generator = preprocces_images(df_filtering)
+    model = build_model(20)
 
     start_time = time.time()
-    history = train_model(model, train_generator, 15, 100)
+    history = train_model(model, train_generator, 50, 100, validation_data=validation_generator, validation_steps=50)
+
     end_time = time.time()
     plot_training_history(history)
+    y_score, y_test = get_predictions_and_labels(model, validation_generator)
+    cnf_matrix = confusion_matrix(y_test, y_score)
+    plot_confusion_matrix(cnf_matrix, classes=['Normal', 'Diabetes'], normalize=True, title='Normalized confusion matrix')
+    plt.show()
     print(f"Total training time: {end_time - start_time} seconds")
