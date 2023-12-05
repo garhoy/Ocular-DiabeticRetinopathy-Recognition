@@ -5,15 +5,16 @@ from tensorflow.keras.applications import ResNet152, InceptionV3, DenseNet121, E
 from tensorflow.keras import layers, models
 from tqdm import tqdm
 import time
+
 import os
 import matplotlib.pyplot as plt
 from tensorflow.keras.optimizers import Adam
-
+from tensorflow.keras.callbacks import ModelCheckpoint
 import itertools
 import numpy as np
 np.set_printoptions(threshold=np.inf)
 np.set_printoptions(linewidth=np.nan)
-
+from tensorflow.keras.models import load_model
 from sklearn import svm, datasets
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix
@@ -44,11 +45,10 @@ def preprocces_images(df_filtering):
         zoom_range=0.2,
         horizontal_flip=True,
         fill_mode='nearest',
-        validation_split=0.2 
+        validation_split=0.2  # por ejemplo, 20% para validación
     )
 
     df_filtering['filename'] = '/content/drive/MyDrive/TFG/TrainDosClases/' + df_filtering['filename']
-    print(df_filtering)
 
     train_generator = datagen.flow_from_dataframe(
         dataframe=df_filtering,
@@ -58,7 +58,7 @@ def preprocces_images(df_filtering):
         target_size=target_size,
         batch_size=32,
         class_mode='binary',
-        subset='training' 
+        subset='training'
     )
 
     validation_generator = datagen.flow_from_dataframe(
@@ -69,7 +69,7 @@ def preprocces_images(df_filtering):
         target_size=target_size,
         batch_size=32,
         class_mode='binary',
-        subset='validation'  
+        subset='validation'
     )
 
     return train_generator, validation_generator
@@ -126,16 +126,25 @@ def build_model(fine_tune_layers = 0):
     return model
 
 
+def train_model(model, train_generator, epochs, steps_per_epoch, validation_data):
 
-def train_model(model, train_generator, epochs, steps_per_epoch, validation_data, validation_steps):
+    model_checkpoint_callback = ModelCheckpoint(
+    filepath='/content/drive/MyDrive/TFG/Modelo_DenseNet.h5',
+    save_weights_only=False,
+    monitor='val_accuracy',
+    mode='max',
+    save_best_only=True)
+
     history = model.fit(
         train_generator,
-        steps_per_epoch=steps_per_epoch,
+        steps_per_epoch = steps_per_epoch,
         epochs=epochs,
         validation_data=validation_data,
-        validation_steps=validation_steps
+        verbose=1,
+        callbacks=[model_checkpoint_callback]  # Añade el callback aquí
     )
     return history
+
 
 def plot_training_history(history):
 
@@ -193,14 +202,24 @@ if __name__ == "__main__":
     num_new_images = 1265
     target_size = (512,512)
     input_shape = (512,512,3)
+
+    model_path = '/content/drive/MyDrive/TFG/Modelo_DenseNet.h5'
+
+    if os.path.exists(model_path):
+        print("Cargando el modelo guardado.")
+        model = load_model(model_path)
+    else:
+        print("Creando un nuevo modelo.")
+        model = build_model(20)
+
     df_filtering = add_new_images_to_df(df_filtering, start_number, num_new_images, '1')
     print("Labels value count :")
     print(df_filtering['labels'].value_counts())
     train_generator,validation_generator = preprocces_images(df_filtering)
-    model = build_model(20)
+    model = build_model()
 
     start_time = time.time()
-    history = train_model(model, train_generator, 50, 100, validation_data=validation_generator, validation_steps=50)
+    history = train_model(model, train_generator, 70,100, validation_data=validation_generator)
 
     end_time = time.time()
     plot_training_history(history)
